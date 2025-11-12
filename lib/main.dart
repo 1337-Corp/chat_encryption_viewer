@@ -337,12 +337,36 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
   bool _showEncrypted = true;
   bool _isLoading = true;
   List<Map<String, dynamic>> _chats = [];
+  List<Map<String, dynamic>> _filteredChats = [];
   String? _errorMessage;
+  final TextEditingController _searchController = TextEditingController();
+  final Map<String, String> _chatTitles = {}; // Cache decrypted titles
 
   @override
   void initState() {
     super.initState();
     _loadChats();
+    _searchController.addListener(_filterChats);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterChats() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredChats = _chats;
+      } else {
+        _filteredChats = _chats.where((chat) {
+          final title = _chatTitles[chat['id']] ?? '';
+          return title.toLowerCase().contains(query);
+        }).toList();
+      }
+    });
   }
 
   Future<void> _loadChats() async {
@@ -361,13 +385,12 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
         return;
       }
 
-      // Fetch real chats from Supabase
+      // Fetch ALL chats from Supabase (no limit)
       final data = await Supabase.instance.client
           .from('encrypted_chats')
           .select('id, encrypted_payload, created_at, is_starred')
           .eq('user_id', userId)
-          .order('created_at', ascending: false)
-          .limit(10);
+          .order('created_at', ascending: false);
 
       if (!mounted) return;
 
@@ -376,7 +399,11 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
             .whereType<Map<String, dynamic>>()
             .map((chat) => Map<String, dynamic>.from(chat))
             .toList();
+        _filteredChats = _chats;
       });
+
+      // Decrypt titles for search
+      _decryptTitles();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -389,6 +416,28 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _decryptTitles() async {
+    for (var chat in _chats) {
+      try {
+        final encryptedPayload = chat['encrypted_payload'] as String;
+        final decrypted = await EncryptionService.decrypt(encryptedPayload);
+        final payload = jsonDecode(decrypted) as Map<String, dynamic>;
+        final messages = payload['messages'] as List?;
+
+        if (messages != null && messages.isNotEmpty) {
+          final firstMessage = messages.first as Map<String, dynamic>;
+          final text = firstMessage['text'] as String? ?? '';
+          _chatTitles[chat['id']] = text.trim();
+        }
+      } catch (e) {
+        // Skip if can't decrypt
+      }
+    }
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -580,7 +629,7 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                                   ),
                                 ),
                                 Text(
-                                  'Showing ${_chats.length} most recent chats',
+                                  'Total: ${_chats.length} chats${_filteredChats.length != _chats.length ? ' (${_filteredChats.length} shown)' : ''}',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: iconFg.withValues(alpha: 0.6),
@@ -592,9 +641,28 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                         ],
                       ),
                     ),
-                    // Toggle switch
+                    // Search bar
                     Container(
                       padding: const EdgeInsets.all(16),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Search chats...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                  },
+                                )
+                              : null,
+                        ),
+                      ),
+                    ),
+                    // Toggle switch
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -631,7 +699,7 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                     const Divider(height: 1),
                     // Chat list
                     Expanded(
-                      child: _chats.isEmpty
+                      child: _filteredChats.isEmpty
                           ? Center(
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
@@ -641,7 +709,7 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                                       color: iconFg.withValues(alpha: 0.3)),
                                   const SizedBox(height: 16),
                                   Text(
-                                    'No chats found',
+                                    _chats.isEmpty ? 'No chats found' : 'No matching chats',
                                     style: TextStyle(
                                       color: iconFg.withValues(alpha: 0.6),
                                       fontSize: 16,
@@ -649,7 +717,9 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Start chatting in chuk_chat to see them here!',
+                                    _chats.isEmpty
+                                        ? 'Start chatting in chuk_chat to see them here!'
+                                        : 'Try a different search term',
                                     style: TextStyle(
                                       color: iconFg.withValues(alpha: 0.4),
                                       fontSize: 14,
@@ -660,12 +730,22 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
                             )
                           : ListView.builder(
                               padding: const EdgeInsets.all(16),
-                              itemCount: _chats.length,
+                              itemCount: _filteredChats.length,
                               itemBuilder: (context, index) {
                                 return ChatCard(
-                                  chat: _chats[index],
+                                  chat: _filteredChats[index],
                                   showEncrypted: _showEncrypted,
                                   index: index + 1,
+                                  title: _chatTitles[_filteredChats[index]['id']],
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => ChatDetailPage(
+                                          chat: _filteredChats[index],
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 );
                               },
                             ),
@@ -680,12 +760,16 @@ class ChatCard extends StatefulWidget {
   final Map<String, dynamic> chat;
   final bool showEncrypted;
   final int index;
+  final String? title;
+  final VoidCallback? onTap;
 
   const ChatCard({
     super.key,
     required this.chat,
     required this.showEncrypted,
     required this.index,
+    this.title,
+    this.onTap,
   });
 
   @override
@@ -700,14 +784,22 @@ class _ChatCardState extends State<ChatCard> {
   @override
   void initState() {
     super.initState();
-    _decryptChat();
+    // Use cached title if available, otherwise decrypt
+    if (widget.title != null && widget.title!.isNotEmpty) {
+      _decryptedPreview = widget.title;
+      _isDecrypting = false;
+    } else {
+      _decryptChat();
+    }
   }
 
   @override
   void didUpdateWidget(ChatCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.showEncrypted != widget.showEncrypted) {
-      // No need to decrypt again, just show different view
+    if (oldWidget.title != widget.title && widget.title != null) {
+      setState(() {
+        _decryptedPreview = widget.title;
+      });
     }
   }
 
@@ -777,9 +869,12 @@ class _ChatCardState extends State<ChatCard> {
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: iconFg.withValues(alpha: 0.2)),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
@@ -886,6 +981,253 @@ class _ChatCardState extends State<ChatCard> {
           ],
         ),
       ),
+      ),
+    );
+  }
+}
+
+// Detail page to show full conversation
+class ChatDetailPage extends StatefulWidget {
+  final Map<String, dynamic> chat;
+
+  const ChatDetailPage({super.key, required this.chat});
+
+  @override
+  State<ChatDetailPage> createState() => _ChatDetailPageState();
+}
+
+class _ChatDetailPageState extends State<ChatDetailPage> {
+  List<Map<String, dynamic>>? _messages;
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+  }
+
+  Future<void> _loadMessages() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final encryptedPayload = widget.chat['encrypted_payload'] as String;
+      final decrypted = await EncryptionService.decrypt(encryptedPayload);
+      final payload = jsonDecode(decrypted) as Map<String, dynamic>;
+      final messages = payload['messages'] as List?;
+
+      if (messages != null) {
+        setState(() {
+          _messages = messages
+              .map((m) => Map<String, dynamic>.from(m as Map))
+              .toList();
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _messages = [];
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to decrypt chat: $e';
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final iconFg = theme.iconTheme.color ?? Colors.white;
+    final createdAt = DateTime.parse(widget.chat['created_at'] as String);
+    final isStarred = widget.chat['is_starred'] as bool? ?? false;
+
+    // Get chat title from first message
+    String chatTitle = 'Chat';
+    if (_messages != null && _messages!.isNotEmpty) {
+      final firstMsg = _messages!.first['text'] as String? ?? '';
+      chatTitle = firstMsg.trim().isEmpty ? 'Chat' : firstMsg;
+      if (chatTitle.length > 50) {
+        chatTitle = '${chatTitle.substring(0, 50)}...';
+      }
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              chatTitle,
+              style: const TextStyle(fontSize: 18),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              'Created: ${createdAt.toLocal().toString().split('.')[0]}',
+              style: TextStyle(
+                fontSize: 12,
+                color: iconFg.withValues(alpha: 0.6),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (isStarred)
+            Icon(Icons.star, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _errorMessage != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.error_outline,
+                            size: 64, color: Colors.red),
+                        const SizedBox(height: 16),
+                        Text(
+                          _errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : _messages!.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No messages in this chat',
+                        style: TextStyle(
+                          color: iconFg.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _messages!.length,
+                      itemBuilder: (context, index) {
+                        final message = _messages![index];
+                        final sender = message['sender'] as String? ?? 'user';
+                        final text = message['text'] as String? ?? '';
+                        final reasoning = message['reasoning'] as String? ?? '';
+                        final isUser = sender == 'user';
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Avatar
+                              CircleAvatar(
+                                radius: 20,
+                                backgroundColor: isUser
+                                    ? theme.colorScheme.primary.withValues(alpha: 0.2)
+                                    : theme.colorScheme.secondary.withValues(alpha: 0.2),
+                                child: Icon(
+                                  isUser ? Icons.person : Icons.smart_toy,
+                                  size: 20,
+                                  color: isUser
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.secondary,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              // Message content
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      isUser ? 'You' : 'AI Assistant',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: iconFg,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: theme.scaffoldBackgroundColor
+                                            .lighten(0.05),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: iconFg.withValues(alpha: 0.2),
+                                        ),
+                                      ),
+                                      child: SelectableText(
+                                        text,
+                                        style: TextStyle(
+                                          color: iconFg,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                    if (reasoning.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.withValues(alpha: 0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: Colors.blue.withValues(alpha: 0.3),
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.lightbulb_outline,
+                                                  size: 16,
+                                                  color: Colors.blue.shade300,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  'Reasoning',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 12,
+                                                    color: Colors.blue.shade300,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            SelectableText(
+                                              reasoning,
+                                              style: TextStyle(
+                                                color: Colors.blue.shade200,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
     );
   }
 }
