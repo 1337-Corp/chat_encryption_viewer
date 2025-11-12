@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'supabase_config.dart';
 import 'encryption_service.dart';
@@ -396,6 +397,84 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
     await Supabase.instance.client.auth.signOut();
   }
 
+  Future<void> _exportChats(bool encrypted) async {
+    if (_chats.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No chats to export')),
+      );
+      return;
+    }
+
+    try {
+      final exportData = <Map<String, dynamic>>[];
+
+      for (var chat in _chats) {
+        if (encrypted) {
+          // Export encrypted
+          exportData.add({
+            'id': chat['id'],
+            'encrypted_payload': chat['encrypted_payload'],
+            'created_at': chat['created_at'],
+            'is_starred': chat['is_starred'],
+          });
+        } else {
+          // Export decrypted
+          final encryptedPayload = chat['encrypted_payload'] as String;
+          final decrypted = await EncryptionService.decrypt(encryptedPayload);
+          final payload = jsonDecode(decrypted) as Map<String, dynamic>;
+
+          exportData.add({
+            'id': chat['id'],
+            'messages': payload['messages'],
+            'created_at': chat['created_at'],
+            'is_starred': chat['is_starred'],
+          });
+        }
+      }
+
+      final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);
+
+      if (!mounted) return;
+
+      // Show export dialog with the JSON
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(encrypted ? 'Encrypted Chats (JSON)' : 'Decrypted Chats (JSON)'),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              jsonString,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                // Copy to clipboard
+                Clipboard.setData(ClipboardData(text: jsonString));
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copied to clipboard')),
+                );
+              },
+              child: const Text('Copy to Clipboard'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -410,6 +489,39 @@ class _EncryptionViewerPageState extends State<EncryptionViewerPage> {
             icon: const Icon(Icons.refresh),
             onPressed: _isLoading ? null : _loadChats,
             tooltip: 'Refresh',
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.file_download),
+            tooltip: 'Export Chats',
+            onSelected: (value) {
+              if (value == 'encrypted') {
+                _exportChats(true);
+              } else if (value == 'decrypted') {
+                _exportChats(false);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'encrypted',
+                child: Row(
+                  children: [
+                    Icon(Icons.lock, size: 20),
+                    SizedBox(width: 12),
+                    Text('Export Encrypted (JSON)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'decrypted',
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_open, size: 20),
+                    SizedBox(width: 12),
+                    Text('Export Decrypted (JSON)'),
+                  ],
+                ),
+              ),
+            ],
           ),
           IconButton(
             icon: const Icon(Icons.logout),
