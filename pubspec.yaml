@@ -41,8 +41,8 @@ dependencies:
   # Encryption library (same as main app)
   cryptography: ^2.7.0
 
-  # Local storage for encryption keys
-  shared_preferences: ^2.3.4
+  # Secure storage for encryption keys (same as main app)
+  flutter_secure_storage: ^9.2.2
 
   # Utilities
   intl: ^0.19.0

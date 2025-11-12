@@ -10,9 +10,10 @@
 This is a **transparency tool** that demonstrates how chats are encrypted in the [chuk_chat](https://github.com/yourusername/chuk_chat) application. It allows users to:
 
 1. **Login** with their chuk_chat credentials
-2. **See encrypted** chat data (as it's stored on your device)
-3. **Toggle** between encrypted and decrypted views
-4. **Verify** that encryption is working properly
+2. **See your real chats** from the chuk_chat app
+3. **View encrypted** data exactly as it's stored in the database
+4. **Toggle** between encrypted and decrypted views
+5. **Verify** that encryption is working properly with your actual chat data
 
 ## 🎯 Purpose
 
@@ -77,7 +78,7 @@ This is **exactly** how your chats are stored on your device!
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/chat_encryption_viewer.git
+git clone https://github.com/1337-Corp/chat_encryption_viewer.git
 cd chat_encryption_viewer
 
 # Get dependencies
